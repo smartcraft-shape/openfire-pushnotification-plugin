@@ -154,6 +154,11 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             return;
         }
 
+        // Avoid sending push notification when discussion history is being sent to a client: https://xmpp.org/extensions/xep-0045.html#enter-history
+        if (((Message) packet).getChildElement("delay", "urn:xmpp:delay") != null) {
+            return;
+        }
+
         if (!(session instanceof ClientSession)) {
             return;
         }
@@ -216,6 +221,7 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
         }
 
         // Perform the pushes
+        Log.debug( "Push notification triggered for user '{}'. Message: {}", user.toString(), message.toXML() );
         for ( final Map.Entry<JID, Map<String, Element>> serviceNode : serviceNodes.entrySet() )
         {
             final JID service = serviceNode.getKey();
