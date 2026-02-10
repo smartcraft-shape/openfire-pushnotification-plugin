@@ -22,6 +22,9 @@ import org.jivesoftware.openfire.OfflineMessage;
 import org.jivesoftware.openfire.OfflineMessageListener;
 import org.jivesoftware.openfire.XMPPServer;
 import org.jivesoftware.openfire.interceptor.PacketInterceptor;
+import org.jivesoftware.openfire.muc.MultiUserChatManager;
+import org.jivesoftware.openfire.muc.MultiUserChatService;
+import org.jivesoftware.openfire.muc.MUCRoom;
 import org.jivesoftware.openfire.interceptor.PacketRejectedException;
 import org.jivesoftware.openfire.session.ClientSession;
 import org.jivesoftware.openfire.session.Session;
@@ -43,6 +46,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.locks.Lock;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class PushInterceptor implements PacketInterceptor, OfflineMessageListener
 {
@@ -113,6 +118,12 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
     private static final Cache<String, HashSet<Instant>> INSTANTS_BY_MESSAGE = CacheFactory.createCache( "pushnotification.messages" );
 
     /**
+     * For MUC (groupchat) messages, we push to all room members (affiliation), not only occupants.
+     * This cache ensures we only trigger that push once per message. Key: muc message id, Value: timestamp when push was sent.
+     */
+    private static final Cache<String, Long> MUC_MESSAGE_PUSH_SENT = CacheFactory.createCache( "pushnotification.mucmessages" );
+
+    /**
      * Invokes the interceptor on the specified packet. The interceptor can either modify
      * the packet, or throw a PacketRejectedException to block it from being sent or processed
      * (when read).<p>
@@ -167,6 +178,16 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             return;
         }
 
+        final Message message = (Message) packet;
+
+        // For groupchat (MUC), push to all room members (affiliation), not only the occupant whose session received the packet.
+        // This ensures invited-but-not-joined users also get push notifications.
+        if ( Message.Type.groupchat == message.getType() )
+        {
+            tryPushNotificationToAllRoomMembers( message );
+            return;
+        }
+
         final User user;
         String username = null;
         try
@@ -181,10 +202,106 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
         }
 
         Log.trace( "If user '{}' has push services configured, pushes need to be sent for a message that just arrived.", user );
-        tryPushNotification( user, (Message) packet );
+        tryPushNotification( user, message );
+    }
+
+    /**
+     * For MUC (groupchat) messages: push to all room members (owners, admins, members), not only occupants.
+     * This ensures users who were invited but have not yet joined the room still receive push notifications.
+     * Deduplication ensures we only trigger once per message (the interceptor is called once per occupant delivery).
+     */
+    private void tryPushNotificationToAllRoomMembers( final Message message )
+    {
+        final JID from = message.getFrom();
+        if ( from == null ) {
+            return;
+        }
+        final String roomName = from.getNode();
+        if ( roomName == null || roomName.isEmpty() ) {
+            return;
+        }
+
+        final MultiUserChatManager mucManager = XMPPServer.getInstance().getMultiUserChatManager();
+        if ( mucManager == null ) {
+            return;
+        }
+
+        final MultiUserChatService mucService = mucManager.getMultiUserChatService( from );
+        if ( mucService == null ) {
+            Log.trace( "No MUC service for room JID: {}", from );
+            return;
+        }
+
+        final Lock roomLock = mucService.getChatRoomLock( roomName );
+        roomLock.lock();
+        MUCRoom room;
+        try {
+            room = mucService.getChatRoom( roomName );
+        } finally {
+            roomLock.unlock();
+        }
+
+        if ( room == null || room.isDestroyed ) {
+            Log.trace( "Room not found or destroyed: {}", roomName );
+            return;
+        }
+
+        final String mucMessageKey = "muc:" + from.toString() + ":" + ( message.getID() != null ? message.getID() : "" ) + message.getBody().hashCode();
+        final Lock cacheLock = MUC_MESSAGE_PUSH_SENT.getLock( mucMessageKey );
+        cacheLock.lock();
+        try {
+            final Long sentAt = MUC_MESSAGE_PUSH_SENT.get( mucMessageKey );
+            if ( sentAt != null && sentAt > System.currentTimeMillis() - Duration.ofMinutes( 5 ).toMillis() ) {
+                Log.trace( "Push already sent for MUC message: {}", mucMessageKey );
+                return;
+            }
+
+            final Collection<JID> owners = room.getOwners();
+            final Collection<JID> admins = room.getAdmins();
+            final Collection<JID> members = room.getMembers();
+            final Collection<JID> outcasts = room.getOutcasts();
+
+            final Set<JID> recipientBareJids = Stream.concat(
+                Stream.concat(
+                    owners != null ? owners.stream() : Stream.empty(),
+                    admins != null ? admins.stream() : Stream.empty()
+                ),
+                members != null ? members.stream() : Stream.empty()
+            )
+                .filter( Objects::nonNull )
+                .map( JID::asBareJID )
+                .collect( Collectors.toSet() );
+
+            if ( outcasts != null ) {
+                outcasts.stream().filter( Objects::nonNull ).map( JID::asBareJID ).forEach( recipientBareJids::remove );
+            }
+
+            final String serverDomain = XMPPServer.getInstance().getServerInfo().getXMPPDomain();
+
+            for ( final JID bareJid : recipientBareJids ) {
+                if ( !serverDomain.equals( bareJid.getDomain() ) ) {
+                    continue;
+                }
+                try {
+                    final User user = XMPPServer.getInstance().getUserManager().getUser( bareJid.getNode() );
+                    tryPushNotification( user, message, room.getNaturalLanguageName() );
+                } catch ( final UserNotFoundException e ) {
+                    Log.trace( "Skip push for non-local MUC member: {}", bareJid );
+                }
+            }
+
+            MUC_MESSAGE_PUSH_SENT.put( mucMessageKey, System.currentTimeMillis() );
+        } finally {
+            cacheLock.unlock();
+        }
     }
 
     private void tryPushNotification( User user, Message message )
+    {
+        tryPushNotification( user, message, null );
+    }
+
+    private void tryPushNotification( User user, Message message, String roomNameForGroupChat )
     {
         final Map<JID, Map<String, Element>> serviceNodes;
         try
@@ -249,8 +366,15 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
                     notificationForm.addField("FORM_TYPE", null, FormField.Type.hidden).addValue("urn:xmpp:push:summary");
                     notificationForm.addField("message-count", null, FormField.Type.text_single).addValue(1);
                     final FormField lastSenderField = notificationForm.addField("last-message-sender", null, FormField.Type.text_single);
-                    if ( SUMMARY_INCLUDE_LAST_SENDER.getValue() ) {
-                        lastSenderField.addValue( message.getFrom() );
+                    if ( SUMMARY_INCLUDE_LAST_SENDER.getValue() && message.getFrom() != null ) {
+                        // For groupchat use bare room JID so the app can open the correct chat
+                        final String senderValue = roomNameForGroupChat != null
+                            ? message.getFrom().asBareJID().toString()
+                            : message.getFrom().toString();
+                        lastSenderField.addValue( senderValue );
+                    }
+                    if ( roomNameForGroupChat != null && !roomNameForGroupChat.isEmpty() ) {
+                        notificationForm.addField("room-name", null, FormField.Type.text_single).addValue( roomNameForGroupChat.trim() );
                     }
                     final FormField lastMessageField = notificationForm.addField("last-message-body", null, FormField.Type.text_single);
                     String includedBody = "New Message"; // For IOS to wake up, some kind of content is required.
@@ -472,6 +596,16 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
                 }
             } finally {
                 lock.unlock();
+            }
+        }
+
+        // Purge MUC message deduplication cache: remove entries older than cutoff
+        final long cutoffMillis = cutoff.toEpochMilli();
+        for ( final String mucKey : new HashSet<>( MUC_MESSAGE_PUSH_SENT.keySet() ) )
+        {
+            final Long sentAt = MUC_MESSAGE_PUSH_SENT.get( mucKey );
+            if ( sentAt != null && sentAt < cutoffMillis ) {
+                MUC_MESSAGE_PUSH_SENT.remove( mucKey );
             }
         }
     }
