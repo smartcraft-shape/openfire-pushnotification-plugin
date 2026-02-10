@@ -23,4 +23,13 @@ Copy `pushnotification.jar` into the plugins directory of your Openfire server, 
 
 To upgrade to a new version, copy the new `pushnotification.jar` file over the existing file.
 
+Releasing (smartcraft-shape fork)
+---------------------------------
+To publish a release (e.g. 1.1.2):
+
+1. Set `pom.xml` version to the release version (e.g. `1.1.2`, no `-SNAPSHOT`).
+2. Commit, push, then create and push a tag:  
+   `git tag patched_1.1.2 && git push origin patched_1.1.2`
+3. The GitHub Action **Release** will build and create the release with `pushnotification.jar`.
+4. Bump `pom.xml` to the next dev version (e.g. `1.1.3-SNAPSHOT`) and commit.
 
