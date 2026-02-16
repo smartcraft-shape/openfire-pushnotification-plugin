@@ -20,6 +20,7 @@ import org.dom4j.QName;
 import org.igniterealtime.openfire.plugins.pushnotification.streammanagement.TerminationDelegateManager;
 import org.jivesoftware.openfire.OfflineMessage;
 import org.jivesoftware.openfire.OfflineMessageListener;
+import org.jivesoftware.openfire.OfflineMessageStore;
 import org.jivesoftware.openfire.XMPPServer;
 import org.jivesoftware.openfire.interceptor.PacketInterceptor;
 import org.jivesoftware.openfire.muc.MultiUserChatManager;
@@ -122,6 +123,14 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
      * This cache ensures we only trigger that push once per message. Key: muc message id, Value: timestamp when push was sent.
      */
     private static final Cache<String, Long> MUC_MESSAGE_PUSH_SENT = CacheFactory.createCache( "pushnotification.mucmessages" );
+
+    /**
+     * Tracks distinct chat JIDs (bare JIDs of 1:1 senders and MUC rooms) that have triggered push
+     * notifications for each user while they were offline. Used as the badge count.
+     * Key: username. Value: Set of bare JIDs.
+     * Cleared when the user has no offline messages (i.e. they came back online and read everything).
+     */
+    private static final Cache<String, HashSet<String>> UNREAD_CHATS_BY_USER = CacheFactory.createCache( "pushnotification.unreadchats" );
 
     /**
      * Invokes the interceptor on the specified packet. The interceptor can either modify
@@ -337,6 +346,36 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             lock.unlock();
         }
 
+        // Track unread chat for badge count
+        int distinctChatCount = 1;
+        final String chatBareJid = message.getFrom() != null ? message.getFrom().toBareJID() : null;
+        if ( chatBareJid != null )
+        {
+            final Lock unreadLock = UNREAD_CHATS_BY_USER.getLock(user.getUsername());
+            unreadLock.lock();
+            try {
+                // If the user has no offline messages, they've come back online and read everything — reset tracking
+                try {
+                    final OfflineMessageStore offlineStore = XMPPServer.getInstance().getOfflineMessageStore();
+                    if ( offlineStore.getCount(user.getUsername()) == 0 ) {
+                        UNREAD_CHATS_BY_USER.remove(user.getUsername());
+                    }
+                } catch ( Exception e ) {
+                    Log.debug("Unable to check offline messages for '{}': {}", user.getUsername(), e.getMessage());
+                }
+
+                HashSet<String> unreadChats = UNREAD_CHATS_BY_USER.get(user.getUsername());
+                if ( unreadChats == null ) {
+                    unreadChats = new HashSet<>();
+                }
+                unreadChats.add(chatBareJid);
+                UNREAD_CHATS_BY_USER.put(user.getUsername(), unreadChats);
+                distinctChatCount = unreadChats.size();
+            } finally {
+                unreadLock.unlock();
+            }
+        }
+
         // Perform the pushes
         Log.debug( "Push notification triggered for user '{}'. Message: {}", user.toString(), message.toXML() );
         for ( final Map.Entry<JID, Map<String, Element>> serviceNode : serviceNodes.entrySet() )
@@ -364,7 +403,7 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
                 {
                     final DataForm notificationForm = new DataForm(DataForm.Type.form);
                     notificationForm.addField("FORM_TYPE", null, FormField.Type.hidden).addValue("urn:xmpp:push:summary");
-                    notificationForm.addField("message-count", null, FormField.Type.text_single).addValue(1);
+                    notificationForm.addField("message-count", null, FormField.Type.text_single).addValue(distinctChatCount);
                     final FormField lastSenderField = notificationForm.addField("last-message-sender", null, FormField.Type.text_single);
                     if ( SUMMARY_INCLUDE_LAST_SENDER.getValue() && message.getFrom() != null ) {
                         // For groupchat use bare room JID so the app can open the correct chat
@@ -606,6 +645,14 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             final Long sentAt = MUC_MESSAGE_PUSH_SENT.get( mucKey );
             if ( sentAt != null && sentAt < cutoffMillis ) {
                 MUC_MESSAGE_PUSH_SENT.remove( mucKey );
+            }
+        }
+
+        // Purge unread chats tracking for users who have no remaining push attempts
+        for ( final String username : new HashSet<>( UNREAD_CHATS_BY_USER.keySet() ) )
+        {
+            if ( !MESSAGES_BY_USER.containsKey(username) ) {
+                UNREAD_CHATS_BY_USER.remove(username);
             }
         }
     }
