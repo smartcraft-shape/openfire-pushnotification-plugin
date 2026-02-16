@@ -20,7 +20,6 @@ import org.dom4j.QName;
 import org.igniterealtime.openfire.plugins.pushnotification.streammanagement.TerminationDelegateManager;
 import org.jivesoftware.openfire.OfflineMessage;
 import org.jivesoftware.openfire.OfflineMessageListener;
-import org.jivesoftware.openfire.OfflineMessageStore;
 import org.jivesoftware.openfire.XMPPServer;
 import org.jivesoftware.openfire.interceptor.PacketInterceptor;
 import org.jivesoftware.openfire.muc.MultiUserChatManager;
@@ -346,7 +345,9 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             lock.unlock();
         }
 
-        // Track unread chat for badge count
+        // Track unread chat for badge count.
+        // The cache is NOT reset automatically — the client sets the correct badge when the app is open.
+        // The server only adds to the cache when new pushes are sent while the app is closed.
         int distinctChatCount = 1;
         final String chatBareJid = message.getFrom() != null ? message.getFrom().toBareJID() : null;
         if ( chatBareJid != null )
@@ -354,16 +355,6 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             final Lock unreadLock = UNREAD_CHATS_BY_USER.getLock(user.getUsername());
             unreadLock.lock();
             try {
-                // If the user has no offline messages, they've come back online and read everything — reset tracking
-                try {
-                    final OfflineMessageStore offlineStore = XMPPServer.getInstance().getOfflineMessageStore();
-                    if ( offlineStore.getCount(user.getUsername()) == 0 ) {
-                        UNREAD_CHATS_BY_USER.remove(user.getUsername());
-                    }
-                } catch ( Exception e ) {
-                    Log.debug("Unable to check offline messages for '{}': {}", user.getUsername(), e.getMessage());
-                }
-
                 HashSet<String> unreadChats = UNREAD_CHATS_BY_USER.get(user.getUsername());
                 if ( unreadChats == null ) {
                     unreadChats = new HashSet<>();
@@ -648,13 +639,6 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             }
         }
 
-        // Purge unread chats tracking for users who have no remaining push attempts
-        for ( final String username : new HashSet<>( UNREAD_CHATS_BY_USER.keySet() ) )
-        {
-            if ( !MESSAGES_BY_USER.containsKey(username) ) {
-                UNREAD_CHATS_BY_USER.remove(username);
-            }
-        }
     }
 
     /**
