@@ -82,6 +82,10 @@ public class PushNotificationPlugin implements Plugin, UserEventListener
         XMPPServer.getInstance().getIQRouter().addHandler( push0IQHandler );
         registeredHandlers.add( push0IQHandler );
 
+        final BadgeSyncIQHandler badgeSyncIQHandler = new BadgeSyncIQHandler();
+        XMPPServer.getInstance().getIQRouter().addHandler( badgeSyncIQHandler );
+        registeredHandlers.add( badgeSyncIQHandler );
+
         UserEventDispatcher.addListener( this );
         InterceptorManager.getInstance().addInterceptor(pushInterceptor);
         InterceptorManager.getInstance().addInterceptor(terminationDelegateManager);

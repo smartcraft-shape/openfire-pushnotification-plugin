@@ -648,4 +648,23 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
     {
         return user.getUsername() + "->" + (message.getID() != null ? message.getID() : "") + message.getFrom().hashCode() + message.getBody().hashCode();
     }
+
+    /**
+     * Replaces the unread chat set for a user with the given set of bare JIDs.
+     * Called by BadgeSyncIQHandler when the client reports its current unread chats.
+     */
+    public static void syncUnreadChats( final String username, final HashSet<String> chatBareJids )
+    {
+        final Lock lock = UNREAD_CHATS_BY_USER.getLock(username);
+        lock.lock();
+        try {
+            if ( chatBareJids == null || chatBareJids.isEmpty() ) {
+                UNREAD_CHATS_BY_USER.remove(username);
+            } else {
+                UNREAD_CHATS_BY_USER.put(username, chatBareJids);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
 }
