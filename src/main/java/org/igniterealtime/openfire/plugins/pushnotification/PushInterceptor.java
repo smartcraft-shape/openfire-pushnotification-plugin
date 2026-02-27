@@ -324,11 +324,19 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             return;
         }
 
+        final String username;
+        try {
+            username = session.getUsername();
+        } catch ( UserNotFoundException e ) {
+            Log.debug( "Could not determine username for MUC invitation push.", e );
+            return;
+        }
+
         final User user;
         try {
-            user = XMPPServer.getInstance().getUserManager().getUser( session.getUsername() );
+            user = XMPPServer.getInstance().getUserManager().getUser( username );
         } catch ( UserNotFoundException e ) {
-            Log.debug( "Not a recognized user for MUC invitation push: " + session.getUsername(), e );
+            Log.debug( "Not a recognized user for MUC invitation push: " + username, e );
             return;
         }
 
