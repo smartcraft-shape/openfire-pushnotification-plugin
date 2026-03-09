@@ -167,17 +167,6 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             return;
         }
 
-        final String body = ((Message) packet).getBody();
-        if ( body == null || body.isEmpty() )
-        {
-            return;
-        }
-
-        // Avoid sending push notification when discussion history is being sent to a client: https://xmpp.org/extensions/xep-0045.html#enter-history
-        if (((Message) packet).getChildElement("delay", "urn:xmpp:delay") != null) {
-            return;
-        }
-
         if (!(session instanceof ClientSession)) {
             return;
         }
@@ -187,6 +176,26 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
         }
 
         final Message message = (Message) packet;
+
+        // Handle MUC invitations (mediated invites per XEP-0045 §7.8.2).
+        // These have no <body>, so they must be checked before the body-null guard.
+        final Element mucUser = message.getChildElement("x", "http://jabber.org/protocol/muc#user");
+        if ( mucUser != null && mucUser.element("invite") != null )
+        {
+            tryPushForMUCInvitation( message, mucUser, (ClientSession) session );
+            return;
+        }
+
+        final String body = message.getBody();
+        if ( body == null || body.isEmpty() )
+        {
+            return;
+        }
+
+        // Avoid sending push notification when discussion history is being sent to a client: https://xmpp.org/extensions/xep-0045.html#enter-history
+        if (message.getChildElement("delay", "urn:xmpp:delay") != null) {
+            return;
+        }
 
         // For groupchat (MUC), push to all room members (affiliation), not only the occupant whose session received the packet.
         // This ensures invited-but-not-joined users also get push notifications.
@@ -304,6 +313,84 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
         }
     }
 
+    /**
+     * Handle MUC invitation stanzas by sending a push notification to the invited user.
+     * The invitation stanza has no body, so we construct a synthetic message with the invitation text.
+     */
+    private void tryPushForMUCInvitation( final Message message, final Element mucUser, final ClientSession session )
+    {
+        final JID roomJid = message.getFrom();
+        if ( roomJid == null ) {
+            return;
+        }
+
+        final String username;
+        try {
+            username = session.getUsername();
+        } catch ( UserNotFoundException e ) {
+            Log.debug( "Could not determine username for MUC invitation push.", e );
+            return;
+        }
+
+        final User user;
+        try {
+            user = XMPPServer.getInstance().getUserManager().getUser( username );
+        } catch ( UserNotFoundException e ) {
+            Log.debug( "Not a recognized user for MUC invitation push: " + username, e );
+            return;
+        }
+
+        // Extract the room's natural language name from the MUC service, falling back to the reason text.
+        String roomName = null;
+        final Element invite = mucUser.element("invite");
+        final String reason = invite != null ? invite.elementText("reason") : null;
+
+        final JID from = message.getFrom();
+        if ( from != null ) {
+            final MultiUserChatManager mucManager = XMPPServer.getInstance().getMultiUserChatManager();
+            if ( mucManager != null ) {
+                final MultiUserChatService mucService = mucManager.getMultiUserChatService( from );
+                if ( mucService != null ) {
+                    final String roomNodeName = from.getNode();
+                    if ( roomNodeName != null ) {
+                        final Lock roomLock = mucService.getChatRoomLock( roomNodeName );
+                        roomLock.lock();
+                        try {
+                            final MUCRoom room = mucService.getChatRoom( roomNodeName );
+                            if ( room != null && !room.isDestroyed ) {
+                                roomName = room.getNaturalLanguageName();
+                            }
+                        } finally {
+                            roomLock.unlock();
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fall back to extracting the name from the reason field ("You've been added to <name>")
+        if ( (roomName == null || roomName.isEmpty()) && reason != null && !reason.isEmpty() ) {
+            roomName = reason.trim();
+            if ( roomName.startsWith("You've been added to ") ) {
+                roomName = roomName.substring("You've been added to ".length()).trim();
+            }
+        }
+
+        if ( roomName == null || roomName.isEmpty() ) {
+            roomName = "a group chat";
+        }
+
+        // Create a synthetic message with the invitation body so tryPushNotification can process it.
+        final Message syntheticMessage = new Message();
+        syntheticMessage.setFrom( message.getFrom() );
+        syntheticMessage.setTo( message.getTo() );
+        syntheticMessage.setBody( "You've been added to " + roomName );
+        syntheticMessage.setID( "muc-invite-" + System.currentTimeMillis() + "-" + roomJid.toBareJID().hashCode() );
+
+        Log.debug( "Sending push notification for MUC invitation to user '{}' for room '{}'", user.toString(), roomJid );
+        tryPushNotification( user, syntheticMessage, roomName );
+    }
+
     private void tryPushNotification( User user, Message message )
     {
         tryPushNotification( user, message, null );
@@ -396,7 +483,7 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
                     notificationForm.addField("FORM_TYPE", null, FormField.Type.hidden).addValue("urn:xmpp:push:summary");
                     notificationForm.addField("message-count", null, FormField.Type.text_single).addValue(distinctChatCount);
                     final FormField lastSenderField = notificationForm.addField("last-message-sender", null, FormField.Type.text_single);
-                    if ( SUMMARY_INCLUDE_LAST_SENDER.getValue() && message.getFrom() != null ) {
+                    if ( message.getFrom() != null && (SUMMARY_INCLUDE_LAST_SENDER.getValue() || roomNameForGroupChat != null) ) {
                         // For groupchat use bare room JID so the app can open the correct chat
                         final String senderValue = roomNameForGroupChat != null
                             ? message.getFrom().asBareJID().toString()
@@ -408,7 +495,7 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
                     }
                     final FormField lastMessageField = notificationForm.addField("last-message-body", null, FormField.Type.text_single);
                     String includedBody = "New Message"; // For IOS to wake up, some kind of content is required.
-                    if ( SUMMARY_INCLUDE_LAST_MESSAGE_BODY.getValue() ) {
+                    if ( SUMMARY_INCLUDE_LAST_MESSAGE_BODY.getValue() || roomNameForGroupChat != null ) {
                         if ( message.getBody() != null && !message.getBody().trim().isEmpty() ) {
                             includedBody = message.getBody().trim();
                         }
