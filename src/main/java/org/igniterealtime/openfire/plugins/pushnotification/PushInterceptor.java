@@ -493,6 +493,9 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
                     if ( roomNameForGroupChat != null && !roomNameForGroupChat.isEmpty() ) {
                         notificationForm.addField("room-name", null, FormField.Type.text_single).addValue( roomNameForGroupChat.trim() );
                     }
+                    if ( roomNameForGroupChat != null && message.getFrom() != null && message.getFrom().getResource() != null ) {
+                        notificationForm.addField("message-sender-nick", null, FormField.Type.text_single).addValue( message.getFrom().getResource() );
+                    }
                     final FormField lastMessageField = notificationForm.addField("last-message-body", null, FormField.Type.text_single);
                     String includedBody = "New Message"; // For IOS to wake up, some kind of content is required.
                     if ( SUMMARY_INCLUDE_LAST_MESSAGE_BODY.getValue() || roomNameForGroupChat != null ) {
