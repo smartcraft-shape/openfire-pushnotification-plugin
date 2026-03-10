@@ -385,7 +385,8 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
         syntheticMessage.setFrom( message.getFrom() );
         syntheticMessage.setTo( message.getTo() );
         syntheticMessage.setBody( "You've been added to " + roomName );
-        syntheticMessage.setID( "muc-invite-" + System.currentTimeMillis() + "-" + roomJid.toBareJID().hashCode() );
+        String originalId = message.getID() != null ? message.getID() : roomJid.toBareJID().toString();
+        syntheticMessage.setID( "muc-invite-" + originalId );
 
         Log.debug( "Sending push notification for MUC invitation to user '{}' for room '{}'", user.toString(), roomJid );
         tryPushNotification( user, syntheticMessage, roomName );
