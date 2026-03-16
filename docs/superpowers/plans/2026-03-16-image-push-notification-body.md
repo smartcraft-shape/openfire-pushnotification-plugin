@@ -6,40 +6,30 @@
 
 **Architecture:** A new package-private static helper method `resolveNotificationBody(String)` is added to `PushInterceptor`. It detects bare image URLs by checking for no internal whitespace, an `http(s)://` scheme, and a known image file extension (case-insensitive). The existing `includedBody` assignment in `tryPushNotification` is updated to pass through this method. The method is package-private to allow direct unit testing without reflection.
 
-**Tech Stack:** Java, Maven, JUnit 5 (junit-jupiter 5.10.0)
+**Tech Stack:** Java, Maven, JUnit 4 (junit:junit:4.13.2). The parent POM already includes Surefire (v2.12.4) which supports JUnit 4 — no Surefire override needed.
 
 ---
 
 ## Chunk 1: Tests + Implementation
 
-### Task 1: Add JUnit 5 test dependency
+### Task 1: Add JUnit 4 test dependency
 
 **Files:**
 - Modify: `pom.xml`
 
-- [ ] **Step 1: Add JUnit 5 dependency and Surefire plugin configuration to `pom.xml`**
+- [ ] **Step 1: Add JUnit 4 dependency to `pom.xml`**
 
   Add inside `<project>`, after the existing `<build>` block:
 
   ```xml
   <dependencies>
       <dependency>
-          <groupId>org.junit.jupiter</groupId>
-          <artifactId>junit-jupiter</artifactId>
-          <version>5.10.0</version>
+          <groupId>junit</groupId>
+          <artifactId>junit</artifactId>
+          <version>4.13.2</version>
           <scope>test</scope>
       </dependency>
   </dependencies>
-  ```
-
-  Also add inside the existing `<build><plugins>` block:
-
-  ```xml
-  <plugin>
-      <groupId>org.apache.maven.plugins</groupId>
-      <artifactId>maven-surefire-plugin</artifactId>
-      <version>3.2.5</version>
-  </plugin>
   ```
 
 - [ ] **Step 2: Verify the dependency resolves**
@@ -48,7 +38,7 @@
   ```bash
   mvn dependency:resolve -q
   ```
-  Expected: exits 0, no resolution errors for `junit-jupiter`.
+  Expected: exits 0, no resolution errors for `junit`.
 
 ---
 
@@ -62,75 +52,75 @@
   ```java
   package org.igniterealtime.openfire.plugins.pushnotification;
 
-  import org.junit.jupiter.api.Test;
-  import static org.junit.jupiter.api.Assertions.assertEquals;
+  import org.junit.Test;
+  import static org.junit.Assert.assertEquals;
 
-  class PushInterceptorTest {
+  public class PushInterceptorTest {
 
       // --- Image URLs that should return "Sent a photo" ---
 
       @Test
-      void jpg_url_returns_sent_a_photo() {
+      public void jpg_url_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.jpg"));
       }
 
       @Test
-      void jpeg_url_returns_sent_a_photo() {
+      public void jpeg_url_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.jpeg"));
       }
 
       @Test
-      void png_url_returns_sent_a_photo() {
+      public void png_url_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.png"));
       }
 
       @Test
-      void gif_url_returns_sent_a_photo() {
+      public void gif_url_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/anim.gif"));
       }
 
       @Test
-      void webp_url_returns_sent_a_photo() {
+      public void webp_url_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.webp"));
       }
 
       @Test
-      void bmp_url_returns_sent_a_photo() {
+      public void bmp_url_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.bmp"));
       }
 
       @Test
-      void uppercase_extension_returns_sent_a_photo() {
+      public void uppercase_extension_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.PNG"));
       }
 
       @Test
-      void mixed_case_extension_returns_sent_a_photo() {
+      public void mixed_case_extension_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.Jpeg"));
       }
 
       @Test
-      void image_url_with_query_string_returns_sent_a_photo() {
+      public void image_url_with_query_string_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.png?v=123&size=large"));
       }
 
       @Test
-      void image_url_with_fragment_returns_sent_a_photo() {
+      public void image_url_with_fragment_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("https://cdn.example.com/img/photo.jpg#anchor"));
       }
 
       @Test
-      void http_scheme_image_url_returns_sent_a_photo() {
+      public void http_scheme_image_url_returns_sent_a_photo() {
           assertEquals("Sent a photo",
               PushInterceptor.resolveNotificationBody("http://cdn.example.com/img/photo.jpg"));
       }
@@ -138,31 +128,31 @@
       // --- Bodies that should pass through unchanged ---
 
       @Test
-      void plain_text_passes_through() {
+      public void plain_text_passes_through() {
           assertEquals("Hello world",
               PushInterceptor.resolveNotificationBody("Hello world"));
       }
 
       @Test
-      void link_with_surrounding_text_passes_through() {
+      public void link_with_surrounding_text_passes_through() {
           String body = "check this out https://cdn.example.com/photo.jpg";
           assertEquals(body, PushInterceptor.resolveNotificationBody(body));
       }
 
       @Test
-      void non_image_url_passes_through() {
+      public void non_image_url_passes_through() {
           String body = "https://cdn.example.com/document.pdf";
           assertEquals(body, PushInterceptor.resolveNotificationBody(body));
       }
 
       @Test
-      void url_without_extension_passes_through() {
+      public void url_without_extension_passes_through() {
           String body = "https://example.com/page";
           assertEquals(body, PushInterceptor.resolveNotificationBody(body));
       }
 
       @Test
-      void non_http_scheme_passes_through() {
+      public void non_http_scheme_passes_through() {
           String body = "ftp://cdn.example.com/img/photo.jpg";
           assertEquals(body, PushInterceptor.resolveNotificationBody(body));
       }
@@ -172,7 +162,7 @@
 - [ ] **Step 2: Run tests to verify they fail**
 
   ```bash
-  mvn test -pl . -Dtest=PushInterceptorTest -q 2>&1 | tail -20
+  mvn test -Dtest=PushInterceptorTest -q 2>&1 | tail -20
   ```
   Expected: compilation error — `resolveNotificationBody` does not exist yet.
 
@@ -185,7 +175,7 @@
 
 - [ ] **Step 1: Add the `resolveNotificationBody` method**
 
-  Add this method anywhere in `PushInterceptor` (e.g. just before `getMessageIdentifier`):
+  Add this method just before the existing `getMessageIdentifier` method at the bottom of `PushInterceptor`:
 
   ```java
   /**
@@ -243,7 +233,7 @@
 - [ ] **Step 3: Run tests to verify they all pass**
 
   ```bash
-  mvn test -pl . -Dtest=PushInterceptorTest 2>&1 | tail -20
+  mvn test -Dtest=PushInterceptorTest 2>&1 | tail -20
   ```
   Expected: `BUILD SUCCESS`, all 16 tests pass.
 
