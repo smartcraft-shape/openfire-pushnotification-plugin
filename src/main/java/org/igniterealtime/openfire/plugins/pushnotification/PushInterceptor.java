@@ -42,6 +42,8 @@ import org.xmpp.packet.JID;
 import org.xmpp.packet.Message;
 import org.xmpp.packet.Packet;
 
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
@@ -501,7 +503,7 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
                     String includedBody = "New Message"; // For IOS to wake up, some kind of content is required.
                     if ( SUMMARY_INCLUDE_LAST_MESSAGE_BODY.getValue() || roomNameForGroupChat != null ) {
                         if ( message.getBody() != null && !message.getBody().trim().isEmpty() ) {
-                            includedBody = message.getBody().trim();
+                            includedBody = resolveNotificationBody( message.getBody().trim() );
                         }
                     }
                     lastMessageField.addValue( includedBody );
@@ -730,6 +732,45 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
             }
         }
 
+    }
+
+    private static final Set<String> IMAGE_EXTENSIONS = new HashSet<>( Arrays.asList(
+        "jpg", "jpeg", "png", "gif", "webp", "bmp"
+    ) );
+
+    static String resolveNotificationBody( final String body )
+    {
+        return isImageAttachment( body ) ? "Sent a photo" : body;
+    }
+
+    private static boolean isImageAttachment( final String body )
+    {
+        if ( containsWhitespace( body ) ) { return false; }
+        try {
+            final URI uri = new URI( body );
+            return isHttpUrl( uri ) && hasImageExtension( uri.getPath() );
+        } catch ( URISyntaxException e ) {
+            return false;
+        }
+    }
+
+    private static boolean containsWhitespace( final String text )
+    {
+        return text.chars().anyMatch( Character::isWhitespace );
+    }
+
+    private static boolean isHttpUrl( final URI uri )
+    {
+        final String scheme = uri.getScheme();
+        return "http".equalsIgnoreCase( scheme ) || "https".equalsIgnoreCase( scheme );
+    }
+
+    private static boolean hasImageExtension( final String path )
+    {
+        if ( path == null || path.isEmpty() ) { return false; }
+        final int dotIndex = path.lastIndexOf( '.' );
+        if ( dotIndex == -1 ) { return false; }
+        return IMAGE_EXTENSIONS.contains( path.substring( dotIndex + 1 ).toLowerCase() );
     }
 
     /**
