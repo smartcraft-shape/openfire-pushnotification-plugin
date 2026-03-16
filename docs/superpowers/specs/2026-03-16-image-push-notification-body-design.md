@@ -19,7 +19,7 @@ Changes are confined to `PushInterceptor.java` in the openfire-pushnotification-
 
 ### Detection Logic
 
-A private helper method `resolveNotificationBody(String body)` is added to `PushInterceptor`:
+A package-private static helper method `resolveNotificationBody(String body)` is added to `PushInterceptor`. It is package-private (rather than private) so it can be called directly in unit tests without reflection:
 
 1. **Bare URL check** — if the body contains whitespace, it cannot be a standalone URL attachment; return as-is immediately.
 2. **URL scheme check** — if the body does not start with `http://` or `https://`, return as-is.
