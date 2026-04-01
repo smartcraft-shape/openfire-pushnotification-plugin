@@ -394,6 +394,31 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
         tryPushNotification( user, syntheticMessage, roomName );
     }
 
+    /**
+     * Returns true if the message contains a <x xmlns='urn:ted:mention'> element with an
+     * <item> whose jid attribute matches the given recipient's bare JID.
+     * This is used to add a mention indicator to the push notification.
+     */
+    private static boolean isMentionedInMessage( final Message message, final User recipient )
+    {
+        final Element mentionX = message.getElement().element(
+            org.dom4j.DocumentHelper.createQName( "x", org.dom4j.DocumentHelper.createNamespace( "", "urn:ted:mention" ) )
+        );
+        if ( mentionX == null ) {
+            return false;
+        }
+        final String serverDomain = XMPPServer.getInstance().getServerInfo().getXMPPDomain();
+        final String recipientBareJid = recipient.getUsername() + "@" + serverDomain;
+        for ( final Iterator<Element> it = mentionX.elementIterator( "item" ); it.hasNext(); ) {
+            final Element item = it.next();
+            final String jid = item.attributeValue( "jid" );
+            if ( jid != null && jid.split( "/" )[0].equalsIgnoreCase( recipientBareJid ) ) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void tryPushNotification( User user, Message message )
     {
         tryPushNotification( user, message, null );
@@ -498,6 +523,9 @@ public class PushInterceptor implements PacketInterceptor, OfflineMessageListene
                     }
                     if ( roomNameForGroupChat != null && message.getFrom() != null && message.getFrom().getResource() != null ) {
                         notificationForm.addField("message-sender-nick", null, FormField.Type.text_single).addValue( message.getFrom().getResource() );
+                    }
+                    if ( isMentionedInMessage( message, user ) ) {
+                        notificationForm.addField("is-mention", null, FormField.Type.text_single).addValue( "true" );
                     }
                     final FormField lastMessageField = notificationForm.addField("last-message-body", null, FormField.Type.text_single);
                     String includedBody = "New Message"; // For IOS to wake up, some kind of content is required.
